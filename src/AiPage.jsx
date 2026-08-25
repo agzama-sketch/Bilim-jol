@@ -500,7 +500,7 @@ const CSS = `
 .suggestion-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 
 .chat-input-row { display: flex; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--line); align-items: flex-end; }
-.chat-input { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font-size: 13.5px; font-family: inherit; color: var(--white-1); max-height: 120px; }
+.chat-input { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font-size: 13.5px; font-family: inherit; color: var(--black-1); max-height: 120px; color: #ffffff;}
 .chat-input:focus { border-color: var(--orange); outline: none; }
 .chat-send { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; }
 
