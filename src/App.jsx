@@ -16,6 +16,7 @@ import {
   Check,
   ArrowLeft,
   ShieldCheck,
+  Coins,
 } from "lucide-react";
 
 const LANGS = [
@@ -142,6 +143,7 @@ const T = {
     doneLoginText: "Это ваши сохранённые данные. Панель с прогрессом и заданиями появится здесь на следующем этапе разработки.",
     doneAdminTitle: "Вход в панель администратора",
     doneAdminText: "Админ-панель ещё в разработке и будет добавлена отдельно.",
+    coinToast: (n) => `Вам начислено ${n} ${n === 1 ? "монета" : n < 5 ? "монеты" : "монет"}`,
   },
   kk: {
     eyebrow: "ДАЙЫНДЫҚ ПЛАТФОРМАСЫ",
@@ -198,6 +200,7 @@ const T = {
     doneLoginText: "Бұл — сіздің сақталған деректеріңіз. Прогресс пен тапсырмалар тақтасы келесі кезеңде осы жерде пайда болады.",
     doneAdminTitle: "Әкімші тақтасына кіру",
     doneAdminText: "Әкімші тақтасы әлі әзірленуде, кейін бөлек қосылады.",
+    coinToast: (n) => `Сізге ${n} монета есептелді`,
   },
   en: {
     eyebrow: "PREP PLATFORM",
@@ -254,6 +257,7 @@ const T = {
     doneLoginText: "This is your saved data. The progress and tasks dashboard will appear here in the next build.",
     doneAdminTitle: "Admin panel access",
     doneAdminText: "The admin panel is still in development and will be added separately.",
+    coinToast: (n) => `You earned ${n} coin${n === 1 ? "" : "s"}`,
   },
 };
 
@@ -281,10 +285,39 @@ function yesterdayStr(fromToday) {
   return d.toISOString().slice(0, 10);
 }
 
+// Achievement tiers — kept in sync with the tiers Cabinet.jsx uses to
+// render the achievements grid, so "unlocked" here means the exact same
+// thing as "shown as unlocked" there.
+const STREAK_TIERS = [1, 3, 5, 10, 20, 50, 100];
+const MODULE_TIERS = [1, 3, 5, 10, 20, 50, 100];
+const COINS_PER_ACHIEVEMENT = 3;
+
+function computeUnlockedAchievementKeys({ maxStreak, modulesCompleted, perfectModuleCompleted }) {
+  const keys = [];
+  STREAK_TIERS.forEach((n) => {
+    if ((maxStreak || 0) >= n) keys.push(`streak-${n}`);
+  });
+  MODULE_TIERS.forEach((n) => {
+    if ((modulesCompleted || 0) >= n) keys.push(`modules-${n}`);
+  });
+  if (perfectModuleCompleted) keys.push("perfect");
+  return keys;
+}
+
+// Compares the achievement keys already recorded as unlocked against what
+// the current stats now unlock, returning just the newly-crossed ones —
+// these are the only ones that should ever earn coins.
+function diffNewlyUnlocked(previouslyUnlocked, stats) {
+  const nowUnlocked = computeUnlockedAchievementKeys(stats);
+  return nowUnlocked.filter((k) => !previouslyUnlocked.includes(k));
+}
+
 // Recomputes the login streak for a user based on the last day they were
 // active. Same-day logins are idempotent (streak unchanged), a login on
 // the very next calendar day increments the streak, and any bigger gap
-// resets it back to 1. Persists the result and returns it.
+// resets it back to 1. Persists the result and returns it. A streak that
+// crosses an achievement tier just by logging in (e.g. day 3 in a row)
+// also earns its coins here, in the same update.
 async function updateStreakForUser(userId, previous) {
   const today = todayStr();
   const last = previous.last_active_date;
@@ -303,13 +336,38 @@ async function updateStreakForUser(userId, previous) {
   // the current streak later resets.
   const newMaxStreak = Math.max(previous.max_streak || previous.streak || 1, newStreak);
 
+  const previouslyUnlocked = previous.unlocked_achievements || [];
+  const newlyUnlocked = diffNewlyUnlocked(previouslyUnlocked, {
+    maxStreak: newMaxStreak,
+    modulesCompleted: previous.modules_completed || 0,
+    perfectModuleCompleted: !!previous.perfect_module_completed,
+  });
+  const achievementCoinsGained = newlyUnlocked.length * COINS_PER_ACHIEVEMENT;
+  const newUnlockedAchievements = newlyUnlocked.length
+    ? [...previouslyUnlocked, ...newlyUnlocked]
+    : previouslyUnlocked;
+  const newCoins = (previous.coins || 0) + achievementCoinsGained;
+
   const { error } = await supabase
     .from("profiles")
-    .update({ streak: newStreak, last_active_date: today, max_streak: newMaxStreak })
+    .update({
+      streak: newStreak,
+      last_active_date: today,
+      max_streak: newMaxStreak,
+      coins: newCoins,
+      unlocked_achievements: newUnlockedAchievements,
+    })
     .eq("id", userId);
   if (error) throw error;
 
-  return { streak: newStreak, last_active_date: today, max_streak: newMaxStreak };
+  return {
+    streak: newStreak,
+    last_active_date: today,
+    max_streak: newMaxStreak,
+    coins: newCoins,
+    unlocked_achievements: newUnlockedAchievements,
+    achievementCoinsGained,
+  };
 }
 
 // Creates the auth user, then writes their profile row (grade, subjects,
@@ -335,6 +393,7 @@ async function registerAccount({ email, password, grade, subjects, lang }) {
     perfect_module_completed: false,
     module_deadlines: {},
     completed_modules: [],
+    unlocked_achievements: [],
   });
   if (insertError) throw insertError;
 
@@ -357,6 +416,7 @@ async function registerAccount({ email, password, grade, subjects, lang }) {
     perfect_module_completed: false,
     module_deadlines: {},
     completed_modules: [],
+    unlocked_achievements: [],
   };
 }
 
@@ -369,15 +429,25 @@ async function loginAccount({ email, password }) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select(
-      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines, completed_modules"
+      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines, completed_modules, unlocked_achievements"
     )
     .eq("id", data.user.id)
     .single();
   if (profileError) throw profileError;
 
   try {
-    const { streak, last_active_date, max_streak } = await updateStreakForUser(data.user.id, profile);
-    return { ...profile, streak, last_active_date, max_streak };
+    const streakResult = await updateStreakForUser(data.user.id, profile);
+    return {
+      ...profile,
+      streak: streakResult.streak,
+      last_active_date: streakResult.last_active_date,
+      max_streak: streakResult.max_streak,
+      coins: streakResult.coins,
+      unlocked_achievements: streakResult.unlocked_achievements,
+      // Not persisted on the profile itself — just carried along this one
+      // time so the caller can show a coin toast right after login.
+      achievementCoinsGained: streakResult.achievementCoinsGained,
+    };
   } catch (streakErr) {
     // Non-fatal: login still succeeds even if the streak update fails.
     console.error("Failed to update streak:", streakErr);
@@ -454,7 +524,7 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
 
   const { data: current, error: curErr } = await supabase
     .from("profiles")
-    .select("xp, coins, modules_completed, perfect_module_completed, completed_modules")
+    .select("xp, coins, modules_completed, perfect_module_completed, completed_modules, max_streak, unlocked_achievements")
     .eq("id", userData.user.id)
     .single();
   if (curErr) throw curErr;
@@ -466,7 +536,7 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
   const oldLevel = Math.floor(oldXp / XP_PER_LEVEL) + 1;
   const newLevel = Math.floor(newXp / XP_PER_LEVEL) + 1;
   const levelsGained = newLevel - oldLevel;
-  const newCoins = (current.coins || 0) + levelsGained * COINS_PER_LEVEL_UP;
+  const levelUpCoins = levelsGained * COINS_PER_LEVEL_UP;
   const newModulesCompleted = alreadyCompleted
     ? current.modules_completed || 0
     : (current.modules_completed || 0) + 1;
@@ -474,6 +544,21 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
   const newCompletedModules = alreadyCompleted
     ? current.completed_modules || []
     : [...(current.completed_modules || []), moduleId];
+
+  // Finishing a module can itself cross an achievement tier (module count,
+  // or the first-ever 100% run) — fold those coins into this same update.
+  const previouslyUnlocked = current.unlocked_achievements || [];
+  const newlyUnlockedAchievements = diffNewlyUnlocked(previouslyUnlocked, {
+    maxStreak: current.max_streak || 1,
+    modulesCompleted: newModulesCompleted,
+    perfectModuleCompleted: newPerfect,
+  });
+  const achievementCoins = newlyUnlockedAchievements.length * COINS_PER_ACHIEVEMENT;
+  const newUnlockedAchievements = newlyUnlockedAchievements.length
+    ? [...previouslyUnlocked, ...newlyUnlockedAchievements]
+    : previouslyUnlocked;
+
+  const newCoins = (current.coins || 0) + levelUpCoins + achievementCoins;
 
   const { error } = await supabase
     .from("profiles")
@@ -483,6 +568,7 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
       modules_completed: newModulesCompleted,
       perfect_module_completed: newPerfect,
       completed_modules: newCompletedModules,
+      unlocked_achievements: newUnlockedAchievements,
     })
     .eq("id", userData.user.id);
   if (error) throw error;
@@ -495,6 +581,10 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
     modulesCompleted: newModulesCompleted,
     perfectModuleCompleted: newPerfect,
     completedModules: newCompletedModules,
+    unlockedAchievements: newUnlockedAchievements,
+    // Total coins earned by this one completion (level-ups + any newly
+    // unlocked achievements) — what the coin toast should show.
+    coinsGained: levelUpCoins + achievementCoins,
   };
 }
 
@@ -541,6 +631,19 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [competitions, setCompetitions] = useState([]);
   const [recommendedModulesInfo, setRecommendedModulesInfo] = useState([]);
+
+  // Small "+N coins" notifications — shown whenever coins land on the
+  // account (level-up, achievement unlock, streak achievement at login),
+  // and auto-dismissed a few seconds later.
+  const [coinToasts, setCoinToasts] = useState([]);
+  const pushCoinToast = (amount) => {
+    if (!amount || amount <= 0) return;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setCoinToasts((prev) => [...prev, { id, amount }]);
+    setTimeout(() => {
+      setCoinToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 5000);
+  };
 
   const [regEmail, setRegEmail] = useState("");
   const [regGrade, setRegGrade] = useState(null);
@@ -688,6 +791,7 @@ export default function App() {
     try {
       const profile = await loginAccount({ email: loginId.trim(), password: loginPassword });
       setProfile(profile);
+      if (profile.achievementCoinsGained > 0) pushCoinToast(profile.achievementCoinsGained);
       if (profile.language && profile.language !== lang) {
         // Restore the language they were using last time, not whatever
         // the gate/header happened to be set to before they logged in.
@@ -746,6 +850,17 @@ export default function App() {
   return (
     <div className="bj-app">
       <style>{CSS}</style>
+
+      {coinToasts.length > 0 && (
+        <div className="coin-toast-stack">
+          {coinToasts.map((toast) => (
+            <div className="coin-toast" key={toast.id}>
+              <Coins size={16} strokeWidth={2.4} />
+              <span>{t.coinToast(toast.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {showSiteChrome && (
         <header className="header">
@@ -1029,9 +1144,11 @@ export default function App() {
                       modules_completed: result.modulesCompleted,
                       perfect_module_completed: result.perfectModuleCompleted,
                       completed_modules: result.completedModules,
+                      unlocked_achievements: result.unlockedAchievements,
                     }
                   : p
               );
+              if (result.coinsGained > 0) pushCoinToast(result.coinsGained);
               return result;
             } catch (err) {
               console.error("Failed to save module completion:", err);
@@ -1175,6 +1292,45 @@ const CSS = `
 .bj-app button:focus-visible {
   outline: 2px solid var(--orange);
   outline-offset: 2px;
+}
+
+/* ---------- coin toasts ---------- */
+.coin-toast-stack {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.coin-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--dark-1);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13.5px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(15, 42, 48, 0.28);
+  animation: coin-toast-in 0.25s ease, coin-toast-out 0.3s ease 4.7s forwards;
+}
+.coin-toast svg { color: var(--orange); flex-shrink: 0; }
+@keyframes coin-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes coin-toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+@media (max-width: 640px) {
+  .coin-toast-stack { left: 12px; right: 12px; top: 12px; align-items: stretch; }
+  .coin-toast { justify-content: center; }
 }
 
 /* ---------- language gate ---------- */

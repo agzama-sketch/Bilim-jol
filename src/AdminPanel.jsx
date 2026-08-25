@@ -18,8 +18,6 @@ import {
   CalendarDays,
 } from "lucide-react";
 
-// Local YYYY-MM-DD (not UTC), used to compare against deadline/event date
-// inputs, which are plain date strings with no timezone of their own.
 function todayStr() {
   const d = new Date();
   const tz = d.getTimezoneOffset() * 60000;
