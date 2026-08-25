@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
-import { Sun, ArrowLeft, Send, Bot, User, Sparkles, BookOpen, Coins, CreditCard, Infinity as InfinityIcon } from "lucide-react";
+import { Sun, ArrowLeft, Send, Bot, User, Sparkles, BookOpen, Coins, Infinity as InfinityIcon } from "lucide-react";
 
 const SUBJECTS = [
   { key: "math", ru: "Математика", kk: "Математика", en: "Mathematics" },
@@ -35,13 +35,19 @@ const T = {
     fallback: "Не удалось получить ответ от ИИ. Попробуй ещё раз чуть позже.",
     noModuleFound: "Пока не нашёл готового модуля по этой теме — загляни в раздел «Задания» позже.",
     pricingTitle: "Тарифы на запросы к ИИ",
-    pricingSubtitle: "Первые 3 запроса бесплатны. Далее — оплата монетами или деньгами.",
-    tabCoins: "За монеты",
-    tabMoney: "За деньги",
+    pricingSubtitle: "Первые 3 запроса бесплатны. Далее — оплата монетами.",
     unit: (n) => (n === 1 ? "1 запрос" : `${n} запросов`),
     unlimited: "Безлимит",
     coinsSuffix: "монет",
     bestValue: "Выгодно",
+    buy: "Купить",
+    buying: "Покупаем…",
+    balanceFree: (n) => `Бесплатных запросов осталось: ${n}`,
+    balancePaid: (coins, prompts) => `Монет: ${coins} · Купленных промптов: ${prompts}`,
+    balanceUnlimited: "У вас безлимитный доступ к ИИ",
+    buyOk: "Пакет успешно куплен!",
+    buyNoCoins: "Недостаточно монет, пополните баланс",
+    loginNeeded: "Войдите в аккаунт, чтобы пользоваться ИИ и покупать пакеты.",
   },
   kk: {
     backHome: "Кабинетке оралу",
@@ -60,13 +66,19 @@ const T = {
     fallback: "AI жауабын алу мүмкін болмады. Сәл кейінірек қайталап көр.",
     noModuleFound: "Бұл тақырып бойынша дайын модуль әлі табылмады — «Тапсырмалар» бөлімін кейінірек қараңыз.",
     pricingTitle: "AI сұрауларының тарифтері",
-    pricingSubtitle: "Алғашқы 3 сұрақ тегін. Одан кейін — монетамен немесе ақшамен төлеу.",
-    tabCoins: "Монетамен",
-    tabMoney: "Ақшамен",
+    pricingSubtitle: "Алғашқы 3 сұрақ тегін. Одан кейін — монетамен төлеу.",
     unit: (n) => (n === 1 ? "1 сұрау" : `${n} сұрау`),
     unlimited: "Шексіз",
     coinsSuffix: "монета",
     bestValue: "Тиімді",
+    buy: "Сатып алу",
+    buying: "Сатып алынуда…",
+    balanceFree: (n) => `Тегін сұраныстар қалды: ${n}`,
+    balancePaid: (coins, prompts) => `Монета: ${coins} · Сатып алынған промпт: ${prompts}`,
+    balanceUnlimited: "Сізде AI-ға шексіз қолжетімділік бар",
+    buyOk: "Пакет сәтті сатып алынды!",
+    buyNoCoins: "Монета жеткіліксіз, балансты толтырыңыз",
+    loginNeeded: "AI-ды пайдалану және пакет сатып алу үшін аккаунтқа кіріңіз.",
   },
   en: {
     backHome: "Back to cabinet",
@@ -85,40 +97,34 @@ const T = {
     fallback: "Couldn't get a response from the AI. Please try again shortly.",
     noModuleFound: "Couldn't find a ready-made module on this topic yet — check the Modules section again later.",
     pricingTitle: "AI request pricing",
-    pricingSubtitle: "First 3 requests are free. After that — pay with coins or money.",
-    tabCoins: "With coins",
-    tabMoney: "With money",
+    pricingSubtitle: "First 3 requests are free. After that — pay with coins.",
     unit: (n) => (n === 1 ? "1 request" : `${n} requests`),
     unlimited: "Unlimited",
     coinsSuffix: "coins",
     bestValue: "Best value",
+    buy: "Buy",
+    buying: "Buying…",
+    balanceFree: (n) => `Free requests left: ${n}`,
+    balancePaid: (coins, prompts) => `Coins: ${coins} · Purchased prompts: ${prompts}`,
+    balanceUnlimited: "You have unlimited AI access",
+    buyOk: "Pack purchased successfully!",
+    buyNoCoins: "Not enough coins, please top up your balance",
+    loginNeeded: "Sign in to use the AI and buy packs.",
   },
 };
 
-// Статичные тарифы (только отображение)
+// Пакеты (только монеты). id — то, что уходит на /webhook/buy-prompts
 const PRICING = [
-  { prompts: 1, coins: 15, money: "0.5 $", unlimited: false },
-  { prompts: 5, coins: 65, money: "2 $", unlimited: false },
-  { prompts: 10, coins: 120, money: "3.5 $", unlimited: false, best: true },
-  { prompts: null, coins: 200, money: "5 $", unlimited: true },
+  { id: "p1", prompts: 1, coins: 15, unlimited: false },
+  { id: "p5", prompts: 5, coins: 65, unlimited: false },
+  { id: "p10", prompts: 10, coins: 120, unlimited: false, best: true },
+  { id: "unlimited", prompts: null, coins: 200, unlimited: true },
 ];
 
 const DEMO_TOPICS = [
-  {
-    match: ["пифагор", "pythagor"],
-    subjectKey: "math",
-    searchTerms: ["пифагор", "pythagor", "треугольник", "triangle"],
-  },
-  {
-    match: ["ньютон", "newton"],
-    subjectKey: "physics",
-    searchTerms: ["ньютон", "newton", "закон"],
-  },
-  {
-    match: ["квадратн", "quadratic"],
-    subjectKey: "math",
-    searchTerms: ["квадратн", "quadratic", "уравнен"],
-  },
+  { match: ["пифагор", "pythagor"], subjectKey: "math", searchTerms: ["пифагор", "pythagor", "треугольник", "triangle"] },
+  { match: ["ньютон", "newton"], subjectKey: "physics", searchTerms: ["ньютон", "newton", "закон"] },
+  { match: ["квадратн", "quadratic"], subjectKey: "math", searchTerms: ["квадратн", "quadratic", "уравнен"] },
 ];
 
 function findDemoTopic(userText) {
@@ -138,6 +144,8 @@ async function findMatchingModule(searchTerms, grade, subjects) {
 
 const N8N_WEBHOOK_URL =
   "https://alisheragzam.app.n8n.cloud/webhook/a8409a8a-0055-4648-99a6-1763b7af9210/chat";
+const BUY_WEBHOOK_URL =
+  "https://alisheragzam.app.n8n.cloud/webhook/buy-prompts";
 
 async function getAIReply(userText, context) {
   const { grade, subjects, lang, userId } = context;
@@ -180,16 +188,30 @@ export default function AiPage({ lang = "ru", grade, subjects = [], onBack, onOp
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [userId, setUserId] = useState(null);
-  const [payTab, setPayTab] = useState("coins");
+  const [profile, setProfile] = useState(null);
+  const [buyingId, setBuyingId] = useState(null);
   const scrollRef = useRef(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? null));
+    supabase.auth.getUser().then(({ data }) => {
+      const id = data.user?.id ?? null;
+      setUserId(id);
+      if (id) loadProfile(id);
+    });
   }, []);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, thinking]);
+
+  async function loadProfile(id) {
+    const { data } = await supabase
+      .from("profiles")
+      .select("coins, ai_prompts_used, ai_prompts_balance, ai_unlimited")
+      .eq("id", id)
+      .single();
+    if (data) setProfile(data);
+  }
 
   const send = async (textOverride) => {
     const text = (textOverride !== undefined ? textOverride : input).trim();
@@ -200,6 +222,7 @@ export default function AiPage({ lang = "ru", grade, subjects = [], onBack, onOp
     try {
       const reply = await getAIReply(text, { grade, subjects, lang, userId });
       setMessages((prev) => [...prev, { role: "assistant", text: reply.text, suggestedModule: reply.suggestedModule }]);
+      if (userId) loadProfile(userId); // обновляем баланс после запроса
     } catch (err) {
       console.error("AI reply failed:", err);
       setMessages((prev) => [...prev, { role: "assistant", text: t.fallback, suggestedModule: null }]);
@@ -215,7 +238,49 @@ export default function AiPage({ lang = "ru", grade, subjects = [], onBack, onOp
     }
   };
 
+  const buyPack = async (packId) => {
+    if (!userId) {
+      alert(t.loginNeeded);
+      return;
+    }
+    if (buyingId) return;
+    setBuyingId(packId);
+    try {
+      const res = await fetch(BUY_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, pack: packId }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setProfile((p) => ({
+          ...(p || {}),
+          coins: data.coins,
+          ai_prompts_balance: data.ai_prompts_balance,
+          ai_unlimited: data.ai_unlimited,
+        }));
+        alert(t.buyOk);
+      } else {
+        alert(t.buyNoCoins);
+      }
+    } catch (err) {
+      console.error("Buy failed:", err);
+      alert(t.buyNoCoins);
+    } finally {
+      setBuyingId(null);
+    }
+  };
+
   const planTitle = (p) => (p.unlimited ? t.unlimited : t.unit(p.prompts));
+
+  const freeLeft = profile ? Math.max(0, 3 - (profile.ai_prompts_used || 0)) : 3;
+
+  const balanceLine = () => {
+    if (!profile) return t.freeNotice;
+    if (profile.ai_unlimited) return t.balanceUnlimited;
+    if (freeLeft > 0) return t.balanceFree(freeLeft);
+    return t.balancePaid(profile.coins ?? 0, profile.ai_prompts_balance ?? 0);
+  };
 
   return (
     <div className="ai-app">
@@ -245,7 +310,7 @@ export default function AiPage({ lang = "ru", grade, subjects = [], onBack, onOp
 
           <div className="demo-notice">
             <Sparkles size={14} strokeWidth={2.4} />
-            <span>{t.freeNotice}</span>
+            <span>{balanceLine()}</span>
           </div>
 
           <div className="chat-card">
@@ -336,47 +401,35 @@ export default function AiPage({ lang = "ru", grade, subjects = [], onBack, onOp
             </div>
           </div>
 
-          {/* Блок тарифов (статичный) */}
+          {/* Блок тарифов (только монеты, с покупкой) */}
           <div className="pricing">
             <div className="pricing-head">
               <h2 className="pricing-title">{t.pricingTitle}</h2>
               <p className="pricing-subtitle">{t.pricingSubtitle}</p>
             </div>
 
-            <div className="pay-tabs">
-              <button
-                type="button"
-                className={"pay-tab " + (payTab === "coins" ? "pay-tab-active" : "")}
-                onClick={() => setPayTab("coins")}
-              >
-                <Coins size={15} strokeWidth={2.4} /> {t.tabCoins}
-              </button>
-              <button
-                type="button"
-                className={"pay-tab " + (payTab === "money" ? "pay-tab-active" : "")}
-                onClick={() => setPayTab("money")}
-              >
-                <CreditCard size={15} strokeWidth={2.4} /> {t.tabMoney}
-              </button>
-            </div>
-
             <div className="plans">
-              {PRICING.map((p, i) => (
-                <div key={i} className={"plan " + (p.best ? "plan-best" : "") + (p.unlimited ? " plan-unlimited" : "")}>
+              {PRICING.map((p) => (
+                <div key={p.id} className={"plan " + (p.best ? "plan-best" : "") + (p.unlimited ? " plan-unlimited" : "")}>
                   {p.best && <div className="plan-badge">{t.bestValue}</div>}
                   <div className="plan-icon">
                     {p.unlimited ? <InfinityIcon size={20} strokeWidth={2.4} /> : <Sparkles size={18} strokeWidth={2.4} />}
                   </div>
                   <div className="plan-title">{planTitle(p)}</div>
                   <div className="plan-price">
-                    {payTab === "coins" ? (
-                      <span className="plan-price-main">
-                        {p.coins} <span className="plan-price-unit">{t.coinsSuffix}</span>
-                      </span>
-                    ) : (
-                      <span className="plan-price-main">{p.money}</span>
-                    )}
+                    <span className="plan-price-main">
+                      {p.coins} <span className="plan-price-unit">{t.coinsSuffix}</span>
+                    </span>
                   </div>
+                  <button
+                    type="button"
+                    className={"btn btn-sm plan-buy " + (p.unlimited ? "btn-orange" : "btn-solid")}
+                    onClick={() => buyPack(p.id)}
+                    disabled={buyingId !== null || (profile && profile.ai_unlimited)}
+                  >
+                    <Coins size={13} strokeWidth={2.6} />
+                    {buyingId === p.id ? t.buying : t.buy}
+                  </button>
                 </div>
               ))}
             </div>
@@ -447,7 +500,7 @@ const CSS = `
 .suggestion-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 
 .chat-input-row { display: flex; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--line); align-items: flex-end; }
-.chat-input { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font-size: 13.5px; font-family: inherit; color: var(--dark-1); max-height: 120px; }
+.chat-input { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font-size: 13.5px; font-family: inherit; color: var(--white-1); max-height: 120px; }
 .chat-input:focus { border-color: var(--orange); outline: none; }
 .chat-send { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; }
 
@@ -455,7 +508,11 @@ const CSS = `
 .btn-solid { background: var(--dark-1); color: #fff; }
 .btn-solid:hover { background: #0b2b31; }
 .btn-solid:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-orange { background: var(--orange); color: #26210a; }
+.btn-orange:hover { background: var(--orange-dark); }
+.btn-orange:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-sm { padding: 7px 13px; font-size: 12px; white-space: nowrap; }
+.plan-buy { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; }
 .empty-text { color: var(--muted); font-size: 13px; }
 
 /* Тарифы */
@@ -463,9 +520,6 @@ const CSS = `
 .pricing-head { text-align: center; margin-bottom: 16px; }
 .pricing-title { font-family: 'Unbounded', sans-serif; font-size: 18px; margin: 0 0 4px; }
 .pricing-subtitle { color: var(--muted); font-size: 13px; margin: 0; }
-.pay-tabs { display: flex; gap: 6px; background: #EEF4F5; border: 1px solid var(--line); border-radius: 999px; padding: 4px; width: fit-content; margin: 0 auto 18px; }
-.pay-tab { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; border-radius: 999px; padding: 8px 16px; font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; }
-.pay-tab-active { background: #fff; color: var(--dark-1); box-shadow: 0 1px 4px rgba(15,57,65,0.1); }
 .plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .plan { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 14px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .plan-best { border-color: var(--orange); box-shadow: 0 4px 16px rgba(245,166,35,0.16); }
