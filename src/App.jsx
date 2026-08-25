@@ -12,7 +12,6 @@ import {
   Bot,
   BarChart3,
   Trophy,
-  Send,
   Map as MapIcon,
   Check,
   ArrowLeft,
@@ -73,12 +72,6 @@ const FEATURES = [
     ru: { title: "Геймификация", desc: "Баллы, уровни и достижения не дают бросить подготовку на полпути." },
     kk: { title: "Геймификация", desc: "Ұпайлар, деңгейлер мен жетістіктер дайындықты жартылай тастатпайды." },
     en: { title: "Gamification", desc: "Points, levels and achievements keep you from quitting halfway through." },
-  },
-  {
-    icon: Send,
-    ru: { title: "Telegram-бот", desc: "Напоминания о дедлайнах олимпиад и заданий приходят прямо в Telegram." },
-    kk: { title: "Telegram-бот", desc: "Олимпиада мен тапсырма мерзімдері туралы еске салулар Telegram-ға келеді." },
-    en: { title: "Telegram bot", desc: "Deadline reminders for olympiads and tasks land straight in Telegram." },
   },
   {
     icon: MapIcon,
