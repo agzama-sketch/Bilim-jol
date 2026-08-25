@@ -334,6 +334,7 @@ async function registerAccount({ email, password, grade, subjects, lang }) {
     modules_completed: 0,
     perfect_module_completed: false,
     module_deadlines: {},
+    completed_modules: [],
   });
   if (insertError) throw insertError;
 
@@ -355,6 +356,7 @@ async function registerAccount({ email, password, grade, subjects, lang }) {
     modules_completed: 0,
     perfect_module_completed: false,
     module_deadlines: {},
+    completed_modules: [],
   };
 }
 
@@ -367,7 +369,7 @@ async function loginAccount({ email, password }) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select(
-      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines"
+      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines, completed_modules"
     )
     .eq("id", data.user.id)
     .single();
@@ -438,30 +440,40 @@ const COINS_PER_LEVEL_UP = 5;
 const XP_PER_LEVEL = 100;
 
 // Same XP/level/coin bookkeeping the app used to do in a plain awardXP
-// helper, plus the two other things a
-// finished module feeds into achievements: a running count of completed
-// modules, and a one-time flag for ever finishing a module with a 100%
-// quiz score. isPerfect is true when the module had questions and every
-// one was answered correctly (a module with no questions never sets it).
-async function recordModuleCompletion(amount, isPerfect) {
+// helper, plus the things a finished module feeds into achievements: a
+// running count of completed modules, a one-time flag for ever finishing
+// a module with a 100% quiz score, and the id itself so that module can
+// stop being offered again. isPerfect is true when the module had
+// questions and every one was answered correctly (a module with no
+// questions never sets it). If this module id was somehow already
+// recorded as completed (e.g. a retried request), XP/coins/counts are
+// left untouched rather than double-counted.
+async function recordModuleCompletion(amount, isPerfect, moduleId) {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
 
   const { data: current, error: curErr } = await supabase
     .from("profiles")
-    .select("xp, coins, modules_completed, perfect_module_completed")
+    .select("xp, coins, modules_completed, perfect_module_completed, completed_modules")
     .eq("id", userData.user.id)
     .single();
   if (curErr) throw curErr;
 
+  const alreadyCompleted = (current.completed_modules || []).includes(moduleId);
+
   const oldXp = current.xp || 0;
-  const newXp = oldXp + amount;
+  const newXp = alreadyCompleted ? oldXp : oldXp + amount;
   const oldLevel = Math.floor(oldXp / XP_PER_LEVEL) + 1;
   const newLevel = Math.floor(newXp / XP_PER_LEVEL) + 1;
   const levelsGained = newLevel - oldLevel;
   const newCoins = (current.coins || 0) + levelsGained * COINS_PER_LEVEL_UP;
-  const newModulesCompleted = (current.modules_completed || 0) + 1;
-  const newPerfect = current.perfect_module_completed || !!isPerfect;
+  const newModulesCompleted = alreadyCompleted
+    ? current.modules_completed || 0
+    : (current.modules_completed || 0) + 1;
+  const newPerfect = current.perfect_module_completed || (!alreadyCompleted && !!isPerfect);
+  const newCompletedModules = alreadyCompleted
+    ? current.completed_modules || []
+    : [...(current.completed_modules || []), moduleId];
 
   const { error } = await supabase
     .from("profiles")
@@ -470,6 +482,7 @@ async function recordModuleCompletion(amount, isPerfect) {
       coins: newCoins,
       modules_completed: newModulesCompleted,
       perfect_module_completed: newPerfect,
+      completed_modules: newCompletedModules,
     })
     .eq("id", userData.user.id);
   if (error) throw error;
@@ -481,6 +494,7 @@ async function recordModuleCompletion(amount, isPerfect) {
     newLevel,
     modulesCompleted: newModulesCompleted,
     perfectModuleCompleted: newPerfect,
+    completedModules: newCompletedModules,
   };
 }
 
@@ -1001,10 +1015,11 @@ export default function App() {
           subjects={profile?.subjects || []}
           recommendedIds={profile?.recommended_modules || []}
           moduleDeadlines={profile?.module_deadlines || {}}
+          completedIds={profile?.completed_modules || []}
           onBack={() => goto("cabinet")}
-          onFinish={async (xpGained, isPerfect) => {
+          onFinish={async (xpGained, isPerfect, moduleId) => {
             try {
-              const result = await recordModuleCompletion(xpGained, isPerfect);
+              const result = await recordModuleCompletion(xpGained, isPerfect, moduleId);
               setProfile((p) =>
                 p
                   ? {
@@ -1013,6 +1028,7 @@ export default function App() {
                       coins: result.coins,
                       modules_completed: result.modulesCompleted,
                       perfect_module_completed: result.perfectModuleCompleted,
+                      completed_modules: result.completedModules,
                     }
                   : p
               );
@@ -1029,6 +1045,9 @@ export default function App() {
                       xp: (p.xp || 0) + xpGained,
                       modules_completed: (p.modules_completed || 0) + 1,
                       perfect_module_completed: p.perfect_module_completed || !!isPerfect,
+                      completed_modules: (p.completed_modules || []).includes(moduleId)
+                        ? p.completed_modules
+                        : [...(p.completed_modules || []), moduleId],
                     }
                   : p
               );

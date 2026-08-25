@@ -41,6 +41,7 @@ const T = {
     levelUpText: (level) => `Новый уровень ${level}! +5 монет`,
     deadlineLabel: (date) => `Дедлайн: ${date}`,
     deadlineOverdue: (date) => `Просрочено: ${date}`,
+    completedBadge: "Пройден",
   },
   kk: {
     title: "Модульдер",
@@ -63,6 +64,7 @@ const T = {
     levelUpText: (level) => `Жаңа деңгей ${level}! +5 монета`,
     deadlineLabel: (date) => `Мерзімі: ${date}`,
     deadlineOverdue: (date) => `Мерзімі өтті: ${date}`,
+    completedBadge: "Аяқталды",
   },
   en: {
     title: "Modules",
@@ -85,6 +87,7 @@ const T = {
     levelUpText: (level) => `New level ${level}! +5 coins`,
     deadlineLabel: (date) => `Deadline: ${date}`,
     deadlineOverdue: (date) => `Overdue: ${date}`,
+    completedBadge: "Completed",
   },
 };
 
@@ -102,6 +105,7 @@ export default function ModulesPage({
   subjects = [],
   recommendedIds = [],
   moduleDeadlines = {},
+  completedIds = [],
   onBack,
   onFinish,
 }) {
@@ -109,6 +113,7 @@ export default function ModulesPage({
   const langKey = lang === "kk" ? "kk" : lang === "en" ? "en" : "ru";
   const subjectLabel = (key) => SUBJECTS.find((s) => s.key === key)?.[langKey] || key;
   const isRecommended = (moduleId) => recommendedIds.includes(moduleId);
+  const isCompleted = (moduleId) => completedIds.includes(moduleId);
 
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -139,6 +144,9 @@ export default function ModulesPage({
           (m) => (m.grade === grade && subjects.includes(m.subject)) || isRecommended(m.id)
         );
         relevant.sort((a, b) => {
+          const aCompleted = isCompleted(a.id) ? 1 : 0;
+          const bCompleted = isCompleted(b.id) ? 1 : 0;
+          if (aCompleted !== bCompleted) return aCompleted - bCompleted;
           const aRec = isRecommended(a.id) ? 0 : 1;
           const bRec = isRecommended(b.id) ? 0 : 1;
           if (aRec !== bRec) return aRec - bRec;
@@ -195,7 +203,7 @@ export default function ModulesPage({
 
   const awardAndMaybeLevelUp = async () => {
     if (!onFinish) return;
-    const result = await onFinish(XP_PER_MODULE, isPerfectRun);
+    const result = await onFinish(XP_PER_MODULE, isPerfectRun, openModule.id);
     if (result && result.levelsGained > 0) setLevelUp({ newLevel: result.newLevel });
   };
 
@@ -234,7 +242,7 @@ export default function ModulesPage({
               {!loading && !error && modules.length > 0 && (
                 <div className="module-grid">
                   {modules.map((m) => (
-                    <div className="module-card" key={m.id}>
+                    <div className={"module-card" + (isCompleted(m.id) ? " completed" : "")} key={m.id}>
                       <div className="module-card-head">
                         <span className="module-title">{m.title}</span>
                         <span className="level-tag">
@@ -242,8 +250,14 @@ export default function ModulesPage({
                         </span>
                       </div>
                       <div className="module-meta">{subjectLabel(m.subject)}</div>
-                      {isRecommended(m.id) && <div className="rec-badge">{t.recommendedBadge}</div>}
-                      {moduleDeadlines[m.id] && (
+                      {isCompleted(m.id) ? (
+                        <div className="completed-badge">
+                          <Check size={12} strokeWidth={3} /> {t.completedBadge}
+                        </div>
+                      ) : (
+                        isRecommended(m.id) && <div className="rec-badge">{t.recommendedBadge}</div>
+                      )}
+                      {!isCompleted(m.id) && moduleDeadlines[m.id] && (
                         <div className={"deadline-badge" + (moduleDeadlines[m.id] < todayStr() ? " overdue" : "")}>
                           {moduleDeadlines[m.id] < todayStr()
                             ? t.deadlineOverdue(moduleDeadlines[m.id])
@@ -251,8 +265,19 @@ export default function ModulesPage({
                         </div>
                       )}
                       {m.description && <div className="module-desc">{m.description}</div>}
-                      <button type="button" className="btn btn-solid btn-block" onClick={() => openModuleDetail(m)}>
-                        {t.openModule}
+                      <button
+                        type="button"
+                        className={"btn btn-block " + (isCompleted(m.id) ? "btn-outline" : "btn-solid")}
+                        disabled={isCompleted(m.id)}
+                        onClick={() => openModuleDetail(m)}
+                      >
+                        {isCompleted(m.id) ? (
+                          <>
+                            <Check size={14} strokeWidth={3} /> {t.completedBadge}
+                          </>
+                        ) : (
+                          t.openModule
+                        )}
                       </button>
                     </div>
                   ))}
@@ -420,6 +445,8 @@ const CSS = `
 .rec-badge { display: inline-block; background: rgba(245,166,35,0.14); color: var(--orange-dark); font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 999px; margin-top: 2px; }
 .deadline-badge { display: inline-block; background: rgba(15,57,65,0.08); color: var(--dark-1); font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 999px; margin-top: 2px; width: fit-content; }
 .deadline-badge.overdue { background: rgba(224,85,63,0.14); color: #E0553F; }
+.completed-badge { display: inline-flex; align-items: center; gap: 4px; background: rgba(47,158,82,0.14); color: #2F9E52; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 999px; margin-top: 2px; width: fit-content; }
+.module-card.completed { opacity: 0.85; }
 
 .card { background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 28px; }
 .card-title { font-family: 'Unbounded', sans-serif; font-size: 20px; margin: 0 0 6px; }
@@ -445,9 +472,11 @@ const CSS = `
 .option:hover { border-color: #cfd9da; }
 .option.active { border-color: var(--orange); background: rgba(245,166,35,0.1); }
 
-.btn { border-radius: 999px; font-weight: 700; padding: 12px 18px; font-size: 14.5px; border: 1px solid transparent; }
+.btn { border-radius: 999px; font-weight: 700; padding: 12px 18px; font-size: 14.5px; border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .btn-solid { background: var(--orange); color: #26210a; }
 .btn-solid:hover:not(:disabled) { background: #ffb63c; }
+.btn-outline { background: transparent; border-color: var(--dark-1); color: var(--dark-1); }
+.btn-outline:hover:not(:disabled) { background: rgba(15,57,65,0.06); }
 .btn-block { width: 100%; text-align: center; }
 
 .done-card { text-align: center; }

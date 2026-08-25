@@ -113,6 +113,9 @@ const T = {
     fieldDeadline: "Дедлайн (необязательно)",
     requiredFieldsError: "Заполните все поля, кроме картинки — без этого модуль не будет добавлен.",
     requiredDateError: "Укажите дату конкурса.",
+    requiredContentError: "Добавьте хотя бы один блок содержания и хотя бы один вопрос со всеми заполненными вариантами ответа.",
+    deadlineModalTitle: "Дедлайн для модуля",
+    deadlineModalHint: "Можно оставить пустым — тогда дедлайна не будет.",
   },
   kk: {
     title: "Басқару тақтасы",
@@ -177,6 +180,9 @@ const T = {
     fieldDeadline: "Мерзімі (міндетті емес)",
     requiredFieldsError: "Суреттен басқа барлық жолды толтырыңыз — олай болмаса модуль қосылмайды.",
     requiredDateError: "Конкурстың күнін көрсетіңіз.",
+    requiredContentError: "Кемінде бір мазмұн блогын және барлық жауап нұсқалары толтырылған кемінде бір сұрақ қосыңыз.",
+    deadlineModalTitle: "Модуль мерзімі",
+    deadlineModalHint: "Бос қалдыруға болады — сол кезде мерзім қойылмайды.",
   },
   en: {
     title: "Dashboard",
@@ -241,6 +247,9 @@ const T = {
     fieldDeadline: "Deadline (optional)",
     requiredFieldsError: "Fill in every field except the picture — the module won't be added otherwise.",
     requiredDateError: "Please set the competition's date.",
+    requiredContentError: "Add at least one content block and at least one question with every option filled in.",
+    deadlineModalTitle: "Module deadline",
+    deadlineModalHint: "You can leave this blank — the module won't have a due date then.",
   },
 };
 
@@ -255,6 +264,19 @@ function overallPct(results) {
   const correct = results.reduce((a, r) => a + (r.correct || 0), 0);
   const total = results.reduce((a, r) => a + (r.total || 0), 0);
   return total > 0 ? Math.round((correct / total) * 100) : null;
+}
+
+// A module counts as having real lesson content only once it has at
+// least one non-empty content block and at least one question whose
+// text and every option are filled in — half-empty blocks/questions
+// don't count, so an admin can't satisfy the requirement by adding an
+// empty block and immediately removing its text.
+function contentIsValid(blocks, questions) {
+  const hasBlock = (blocks || []).some((b) => (b.value || "").trim().length > 0);
+  const hasQuestion = (questions || []).some(
+    (q) => (q.q || "").trim().length > 0 && (q.options || []).every((o) => (o || "").trim().length > 0)
+  );
+  return hasBlock && hasQuestion;
 }
 
 export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, adminEmail = "", onLogout = () => {} }) {
@@ -276,7 +298,7 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
   const [showAddCompetition, setShowAddCompetition] = useState(false);
 
   const [recommendPick, setRecommendPick] = useState({}); // studentId -> moduleId
-  const [recommendDeadline, setRecommendDeadline] = useState({}); // studentId -> "YYYY-MM-DD" | ""
+  const [recommendModal, setRecommendModal] = useState(null); // { student, moduleId, moduleTitle } | null
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingModuleId, setEditingModuleId] = useState(null);
@@ -292,7 +314,7 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
     setStudentsError("");
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, email, grade, subjects, diagnostics_completed, diagnostic_results, recommended_modules, module_deadlines, goal")
+      .select("id, email, grade, subjects, diagnostics_completed, diagnostic_results, recommended_modules, module_deadlines, completed_modules, goal")
       .eq("diagnostics_completed", true)
       .order("created_at", { ascending: false });
     if (error) setStudentsError(t.loadError);
@@ -330,14 +352,13 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
     setShowAddCompetition(false);
   }
 
-  async function recommend(student) {
-    const moduleId = recommendPick[student.id];
-    if (!moduleId) return;
+  // Called from the small deadline modal once the teacher confirms
+  // (deadline may be null — it's optional).
+  async function confirmRecommend(deadline) {
+    if (!recommendModal) return;
+    const { student, moduleId } = recommendModal;
     const updated = Array.from(new Set([...(student.recommended_modules || []), moduleId]));
 
-    // A deadline is optional — the teacher can leave the date field blank
-    // and just recommend the module with no due date.
-    const deadline = recommendDeadline[student.id] || null;
     const updatedDeadlines = { ...(student.module_deadlines || {}) };
     if (deadline) updatedDeadlines[moduleId] = deadline;
 
@@ -352,14 +373,13 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
         )
       );
       setRecommendPick((prev) => ({ ...prev, [student.id]: "" }));
-      setRecommendDeadline((prev) => ({ ...prev, [student.id]: "" }));
     }
+    setRecommendModal(null);
   }
 
   async function handleModuleCreated(newModule) {
     setModules((prev) => [newModule, ...prev]);
     setShowAddForm(false);
-    setEditingModuleId(newModule.id);
   }
 
   function handleModuleSaved(updatedModule) {
@@ -439,8 +459,11 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
                 {students.map((s) => {
                   const pct = overallPct(s.diagnostic_results);
                   const recIds = s.recommended_modules || [];
+                  const completedIds = s.completed_modules || [];
                   const recTitles = recIds.map((id) => modules.find((m) => m.id === id)?.title).filter(Boolean);
-                  const availableModules = modules.filter((m) => !recIds.includes(m.id));
+                  const availableModules = modules.filter(
+                    (m) => !recIds.includes(m.id) && !completedIds.includes(m.id)
+                  );
                   return (
                     <div className="student-row" key={s.id}>
                       <div className="student-info">
@@ -482,23 +505,17 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
                             </option>
                           ))}
                         </select>
-                        <label className="deadline-picker" title={t.fieldDeadline}>
-                          <CalendarDays size={14} />
-                          <input
-                            type="date"
-                            className="deadline-input"
-                            value={recommendDeadline[s.id] || ""}
-                            disabled={!recommendPick[s.id]}
-                            onChange={(e) =>
-                              setRecommendDeadline((prev) => ({ ...prev, [s.id]: e.target.value }))
-                            }
-                          />
-                        </label>
                         <button
                           type="button"
                           className="btn btn-outline btn-sm"
                           disabled={!recommendPick[s.id]}
-                          onClick={() => recommend(s)}
+                          onClick={() =>
+                            setRecommendModal({
+                              student: s,
+                              moduleId: recommendPick[s.id],
+                              moduleTitle: modules.find((m) => m.id === recommendPick[s.id])?.title || "",
+                            })
+                          }
                         >
                           {t.recommendBtn}
                         </button>
@@ -602,6 +619,15 @@ export default function AdminPanel({ lang = "ru", onChangeLang = () => {}, admin
 
       {showAddCompetition && (
         <AddCompetitionModal t={t} langKey={langKey} onClose={() => setShowAddCompetition(false)} onCreated={handleCompetitionCreated} />
+      )}
+
+      {recommendModal && (
+        <RecommendDeadlineModal
+          t={t}
+          data={recommendModal}
+          onClose={() => setRecommendModal(null)}
+          onConfirm={confirmRecommend}
+        />
       )}
     </div>
   );
@@ -711,6 +737,54 @@ function AddCompetitionModal({ t, langKey, onClose, onCreated }) {
   );
 }
 
+function RecommendDeadlineModal({ t, data, onClose, onConfirm }) {
+  const [deadline, setDeadline] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const confirm = async () => {
+    setSaving(true);
+    await onConfirm(deadline || null);
+    setSaving(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal small" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2 className="modal-title">{t.deadlineModalTitle}</h2>
+          <button type="button" className="icon-btn" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="deadline-modal-body">
+          <div className="deadline-modal-student">{data.student.email}</div>
+          <div className="deadline-modal-module">{data.moduleTitle}</div>
+
+          <label className="field-label">{t.fieldDeadline}</label>
+          <input
+            type="date"
+            className="input"
+            min={todayStr()}
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+          />
+          <div className="hint-text">{t.deadlineModalHint}</div>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            {t.cancel}
+          </button>
+          <button type="button" className="btn btn-solid" disabled={saving} onClick={confirm}>
+            {saving ? t.saving : t.recommendBtn}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AddModuleModal({ t, langKey, onClose, onCreated }) {
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState(SUBJECTS[0].key);
@@ -718,16 +792,27 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
   const [level, setLevel] = useState(1);
   const [description, setDescription] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+  const [blocks, setBlocks] = useState([]);
+  const [questions, setQuestions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // Any images added while filling out this form need somewhere in
+  // storage to live before the module row (and its real id) exists —
+  // a random id works just as well as the eventual module id for that.
+  const [storageId] = useState(() =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+
   const submit = async (e) => {
     e.preventDefault();
-    // Every field here is required except the picture (which isn't even
-    // part of this form — images are added afterwards in the content
-    // editor). subject/grade always have a value from their <select>
-    // defaults, so the fields actually worth checking are title, level,
-    // description, and the video link.
+    // Every basic field here is required except the picture (which
+    // isn't part of this form's basic fields — images are added as
+    // content blocks below). subject/grade always have a value from
+    // their <select> defaults, so the fields actually worth checking
+    // are title, level, description, and the video link.
     if (
       !title.trim() ||
       !subject ||
@@ -738,6 +823,13 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
       !videoUrl.trim()
     ) {
       setError(t.requiredFieldsError);
+      return;
+    }
+    // A module without any lesson content or quiz questions isn't
+    // actually usable by a student, so both are required up front
+    // rather than left for a follow-up edit that might never happen.
+    if (!contentIsValid(blocks, questions)) {
+      setError(t.requiredContentError);
       return;
     }
     setSaving(true);
@@ -751,6 +843,8 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
         level: Number(level) || 1,
         description: description.trim(),
         video_url: videoUrl.trim(),
+        content: blocks,
+        questions,
       })
       .select()
       .single();
@@ -764,7 +858,7 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2 className="modal-title">{t.formTitle}</h2>
           <button type="button" className="icon-btn" onClick={onClose}>
@@ -829,6 +923,17 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
             required
           />
 
+          <div className="editor-body">
+            <ModuleContentFields
+              t={t}
+              blocks={blocks}
+              setBlocks={setBlocks}
+              questions={questions}
+              setQuestions={setQuestions}
+              storageId={storageId}
+            />
+          </div>
+
           {error && <div className="error-text">{error}</div>}
 
           <div className="modal-actions">
@@ -845,21 +950,22 @@ function AddModuleModal({ t, langKey, onClose, onCreated }) {
   );
 }
 
-function ModuleEditorModal({ t, module, onClose, onSaved }) {
-  const [blocks, setBlocks] = useState(module.content && module.content.length ? module.content : []);
-  const [questions, setQuestions] = useState(module.questions && module.questions.length ? module.questions : []);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+// Shared content-blocks + questions editor used by both the "add module"
+// form (where the module doesn't exist in the DB yet) and the later
+// content editor (where it does) — storageId is whichever id is
+// available to key uploaded images under in storage.
+function ModuleContentFields({ t, blocks, setBlocks, questions, setQuestions, storageId }) {
   const [uploadingIndex, setUploadingIndex] = useState(null);
+  const [uploadError, setUploadError] = useState("");
 
   const uploadImage = async (i, file) => {
     setUploadingIndex(i);
-    setError("");
+    setUploadError("");
     const ext = file.name.split(".").pop();
-    const path = `${module.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const path = `${storageId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
     const { error: uploadErr } = await supabase.storage.from("modules").upload(path, file);
     if (uploadErr) {
-      setError(uploadErr.message);
+      setUploadError(uploadErr.message);
       setUploadingIndex(null);
       return;
     }
@@ -885,7 +991,136 @@ function ModuleEditorModal({ t, module, onClose, onSaved }) {
     );
   const removeQuestion = (i) => setQuestions((prev) => prev.filter((_, idx) => idx !== i));
 
+  return (
+    <>
+      <div className="editor-section">
+        <div className="editor-section-title">{t.contentSection}</div>
+
+        {blocks.map((block, i) => (
+          <div className="block-card" key={i}>
+            <div className="block-card-head">
+              <span className="block-type">{block.type === "text" ? <TypeIcon size={14} /> : <ImageIcon size={14} />}</span>
+              <button type="button" className="icon-btn small" onClick={() => removeBlock(i)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+            {block.type === "text" ? (
+              <textarea
+                className="textarea"
+                rows={3}
+                value={block.value}
+                placeholder={t.textBlockPh}
+                onChange={(e) => updateBlock(i, { value: e.target.value })}
+              />
+            ) : (
+              <>
+                <div className="upload-row">
+                  <label className="btn btn-outline btn-sm upload-label">
+                    {uploadingIndex === i ? t.uploading : t.uploadFile}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="file-input-hidden"
+                      disabled={uploadingIndex === i}
+                      onChange={(e) => {
+                        const file = e.target.files && e.target.files[0];
+                        if (file) uploadImage(i, file);
+                      }}
+                    />
+                  </label>
+                  {block.value && <img className="block-preview" src={block.value} alt="" />}
+                </div>
+                <div className="hint-text">{t.orUrl}</div>
+                <input
+                  className="input"
+                  value={block.value}
+                  placeholder={t.imageUrlPh}
+                  onChange={(e) => updateBlock(i, { value: e.target.value })}
+                />
+                <input
+                  className="input"
+                  value={block.caption || ""}
+                  placeholder={t.imageCaptionPh}
+                  onChange={(e) => updateBlock(i, { caption: e.target.value })}
+                />
+              </>
+            )}
+          </div>
+        ))}
+
+        <div className="editor-add-row">
+          <button type="button" className="btn btn-outline btn-sm" onClick={addTextBlock}>
+            <Plus size={14} /> {t.addText}
+          </button>
+          <button type="button" className="btn btn-outline btn-sm" onClick={addImageBlock}>
+            <Plus size={14} /> {t.addImage}
+          </button>
+        </div>
+
+        {uploadError && <div className="error-text">{uploadError}</div>}
+      </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">{t.questionsSection}</div>
+
+        {questions.map((question, qi) => (
+          <div className="block-card" key={qi}>
+            <div className="block-card-head">
+              <span className="block-type">Q{qi + 1}</span>
+              <button type="button" className="icon-btn small" onClick={() => removeQuestion(qi)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <input
+              className="input"
+              value={question.q}
+              placeholder={t.questionPh}
+              onChange={(e) => updateQuestion(qi, { q: e.target.value })}
+            />
+            <div className="options-grid">
+              {question.options.map((opt, oi) => (
+                <label className="option-row" key={oi}>
+                  <input
+                    type="radio"
+                    name={`correct-${qi}`}
+                    checked={question.correct === oi}
+                    onChange={() => updateQuestion(qi, { correct: oi })}
+                  />
+                  <input
+                    className="input"
+                    value={opt}
+                    placeholder={t.optionPh(oi)}
+                    onChange={(e) => updateOption(qi, oi, e.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="hint-text">{t.correctHint}</div>
+          </div>
+        ))}
+
+        <button type="button" className="btn btn-outline btn-sm" onClick={addQuestion}>
+          <Plus size={14} /> {t.addQuestion}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function ModuleEditorModal({ t, module, onClose, onSaved }) {
+  const [blocks, setBlocks] = useState(module.content && module.content.length ? module.content : []);
+  const [questions, setQuestions] = useState(module.questions && module.questions.length ? module.questions : []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
   const save = async () => {
+    // A module can't be edited back down to having no content or no
+    // questions — the same requirement that applies when it's first
+    // created still holds here.
+    if (!contentIsValid(blocks, questions)) {
+      setError(t.requiredContentError);
+      return;
+    }
     setSaving(true);
     setError("");
     const { data, error: err } = await supabase
@@ -914,114 +1149,14 @@ function ModuleEditorModal({ t, module, onClose, onSaved }) {
         </div>
 
         <div className="editor-body">
-          <div className="editor-section">
-            <div className="editor-section-title">{t.contentSection}</div>
-
-            {blocks.map((block, i) => (
-              <div className="block-card" key={i}>
-                <div className="block-card-head">
-                  <span className="block-type">{block.type === "text" ? <TypeIcon size={14} /> : <ImageIcon size={14} />}</span>
-                  <button type="button" className="icon-btn small" onClick={() => removeBlock(i)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                {block.type === "text" ? (
-                  <textarea
-                    className="textarea"
-                    rows={3}
-                    value={block.value}
-                    placeholder={t.textBlockPh}
-                    onChange={(e) => updateBlock(i, { value: e.target.value })}
-                  />
-                ) : (
-                  <>
-                    <div className="upload-row">
-                      <label className="btn btn-outline btn-sm upload-label">
-                        {uploadingIndex === i ? t.uploading : t.uploadFile}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="file-input-hidden"
-                          disabled={uploadingIndex === i}
-                          onChange={(e) => {
-                            const file = e.target.files && e.target.files[0];
-                            if (file) uploadImage(i, file);
-                          }}
-                        />
-                      </label>
-                      {block.value && <img className="block-preview" src={block.value} alt="" />}
-                    </div>
-                    <div className="hint-text">{t.orUrl}</div>
-                    <input
-                      className="input"
-                      value={block.value}
-                      placeholder={t.imageUrlPh}
-                      onChange={(e) => updateBlock(i, { value: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      value={block.caption || ""}
-                      placeholder={t.imageCaptionPh}
-                      onChange={(e) => updateBlock(i, { caption: e.target.value })}
-                    />
-                  </>
-                )}
-              </div>
-            ))}
-
-            <div className="editor-add-row">
-              <button type="button" className="btn btn-outline btn-sm" onClick={addTextBlock}>
-                <Plus size={14} /> {t.addText}
-              </button>
-              <button type="button" className="btn btn-outline btn-sm" onClick={addImageBlock}>
-                <Plus size={14} /> {t.addImage}
-              </button>
-            </div>
-          </div>
-
-          <div className="editor-section">
-            <div className="editor-section-title">{t.questionsSection}</div>
-
-            {questions.map((question, qi) => (
-              <div className="block-card" key={qi}>
-                <div className="block-card-head">
-                  <span className="block-type">Q{qi + 1}</span>
-                  <button type="button" className="icon-btn small" onClick={() => removeQuestion(qi)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                <input
-                  className="input"
-                  value={question.q}
-                  placeholder={t.questionPh}
-                  onChange={(e) => updateQuestion(qi, { q: e.target.value })}
-                />
-                <div className="options-grid">
-                  {question.options.map((opt, oi) => (
-                    <label className="option-row" key={oi}>
-                      <input
-                        type="radio"
-                        name={`correct-${qi}`}
-                        checked={question.correct === oi}
-                        onChange={() => updateQuestion(qi, { correct: oi })}
-                      />
-                      <input
-                        className="input"
-                        value={opt}
-                        placeholder={t.optionPh(oi)}
-                        onChange={(e) => updateOption(qi, oi, e.target.value)}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <div className="hint-text">{t.correctHint}</div>
-              </div>
-            ))}
-
-            <button type="button" className="btn btn-outline btn-sm" onClick={addQuestion}>
-              <Plus size={14} /> {t.addQuestion}
-            </button>
-          </div>
+          <ModuleContentFields
+            t={t}
+            blocks={blocks}
+            setBlocks={setBlocks}
+            questions={questions}
+            setQuestions={setQuestions}
+            storageId={module.id}
+          />
         </div>
 
         {error && <div className="error-text">{error}</div>}
@@ -1116,9 +1251,9 @@ const CSS = `
 
 .select { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; font-family: inherit; color: var(--ink); background: #FAFCFC; max-width: 220px; }
 .select.full { width: 100%; margin-bottom: 14px; }
-.deadline-picker { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; background: #FAFCFC; color: var(--muted); }
-.deadline-input { border: none; background: transparent; font-size: 12.5px; font-family: inherit; color: var(--ink); padding: 0; }
-.deadline-input:disabled { color: var(--muted); }
+.deadline-modal-student { font-weight: 800; font-size: 14px; }
+.deadline-modal-module { color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+.deadline-modal-body .input { margin-top: 6px; }
 
 .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
 .module-card { border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
@@ -1142,6 +1277,7 @@ const CSS = `
 .modal-overlay { position: fixed; inset: 0; background: rgba(10,25,29,0.5); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
 .modal { background: #fff; border-radius: 20px; padding: 26px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; }
 .modal.wide { max-width: 720px; }
+.modal.small { max-width: 380px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .modal-title { font-family: 'Unbounded', sans-serif; font-size: 18px; margin: 0; }
 .icon-btn { background: none; border: none; color: var(--muted); padding: 4px; border-radius: 8px; display: flex; }
