@@ -106,6 +106,8 @@ export default function ModulesPage({
   recommendedIds = [],
   moduleDeadlines = {},
   completedIds = [],
+  initialModuleId = null,
+  onInitialModuleConsumed = () => {},
   onBack,
   onFinish,
 }) {
@@ -157,6 +159,17 @@ export default function ModulesPage({
       setLoading(false);
     })();
   }, [grade, JSON.stringify(subjects), JSON.stringify(recommendedIds)]);
+
+  // If the student arrived here via the AI assistant's "Open module"
+  // button, jump straight into that module once it's loaded — then clear
+  // the pending id so navigating back here later doesn't reopen it.
+  useEffect(() => {
+    if (!initialModuleId || modules.length === 0) return;
+    const match = modules.find((m) => m.id === initialModuleId);
+    if (match) openModuleDetail(match);
+    onInitialModuleConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialModuleId, modules]);
 
   const openModuleDetail = (m) => {
     setOpenModule(m);

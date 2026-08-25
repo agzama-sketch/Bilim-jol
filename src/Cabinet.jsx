@@ -83,6 +83,8 @@ const T = {
     goalCancel: "Отмена",
     roadmapTitle: "План подготовки (roadmap)",
     roadmapEmpty: "План появится после того, как накопится больше данных о ваших результатах.",
+    roadmapStage: { foundations: "Основы темы", practice: "Практика и разбор ошибок", review: "Закрепление и повторение" },
+    roadmapPct: (pct) => `Текущий результат: ${pct}%`,
     goToTasks: "Перейти к заданиям",
     competitionsTitle: "Олимпиады и конкурсы",
     competitionsEmpty: "Пока нет конкурсов по вашим предметам.",
@@ -122,6 +124,8 @@ const T = {
     goalCancel: "Бас тарту",
     roadmapTitle: "Дайындық жоспары (roadmap)",
     roadmapEmpty: "Нәтижелеріңіз туралы деректер жиналған соң жоспар пайда болады.",
+    roadmapStage: { foundations: "Тақырып негіздері", practice: "Практика және қателерді талдау", review: "Бекіту және қайталау" },
+    roadmapPct: (pct) => `Ағымдағы нәтиже: ${pct}%`,
     goToTasks: "Тапсырмаларға өту",
     competitionsTitle: "Олимпиадалар мен конкурстар",
     competitionsEmpty: "Әзірге пәндеріңіз бойынша конкурстар жоқ.",
@@ -161,6 +165,8 @@ const T = {
     goalCancel: "Cancel",
     roadmapTitle: "Prep roadmap",
     roadmapEmpty: "Your plan will appear once there's more data on your results.",
+    roadmapStage: { foundations: "Core fundamentals", practice: "Practice and error review", review: "Consolidation and review" },
+    roadmapPct: (pct) => `Current score: ${pct}%`,
     goToTasks: "Go to tasks",
     competitionsTitle: "Olympiads & competitions",
     competitionsEmpty: "No competitions for your subjects yet.",
@@ -191,6 +197,7 @@ export default function CabinetPage({
   goal = "",
   onSetGoal = () => {},
   competitions = [],
+  roadmap = [],
   onNavigate = () => {},
   onLogout = () => {},
   onGoToTasks = () => {},
@@ -401,7 +408,26 @@ export default function CabinetPage({
                 <MapIcon size={16} strokeWidth={2.4} className="accent-icon" />
                 <span className="card-head-title">{t.roadmapTitle}</span>
               </div>
-              <div className="empty-text">{t.roadmapEmpty}</div>
+              {roadmap.length === 0 && <div className="empty-text">{t.roadmapEmpty}</div>}
+              {roadmap.length > 0 && (
+                <div className="roadmap-list">
+                  {roadmap.map((step, i) => {
+                    const color = pctColor(step.pct);
+                    return (
+                      <div className="roadmap-row" key={step.subjectKey}>
+                        <div className={"roadmap-num " + color}>{i + 1}</div>
+                        <div className="roadmap-body">
+                          <div className="roadmap-top">
+                            <span className="roadmap-subject">{subjectLabel(step.subjectKey)}</span>
+                            <span className={"roadmap-pct " + color}>{step.pct}%</span>
+                          </div>
+                          <div className="roadmap-stage">{t.roadmapStage[step.stage]}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
@@ -677,6 +703,25 @@ const CSS = `
 .weak-pct.green { color: var(--green); }
 .weak-pct.orange { color: var(--orange-dark); }
 .weak-pct.red { color: var(--red); }
+
+.roadmap-list { display: flex; flex-direction: column; gap: 14px; }
+.roadmap-row { display: flex; gap: 12px; align-items: flex-start; }
+.roadmap-num {
+  width: 26px; height: 26px; border-radius: 999px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: #fff; background: var(--muted);
+}
+.roadmap-num.green { background: var(--green); }
+.roadmap-num.orange { background: var(--orange); }
+.roadmap-num.red { background: var(--red); }
+.roadmap-body { flex: 1; min-width: 0; }
+.roadmap-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.roadmap-subject { font-size: 13.5px; font-weight: 700; }
+.roadmap-pct { font-size: 12px; font-weight: 800; }
+.roadmap-pct.green { color: var(--green); }
+.roadmap-pct.orange { color: var(--orange-dark); }
+.roadmap-pct.red { color: var(--red); }
+.roadmap-stage { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 
 .btn { border-radius: 999px; font-weight: 700; padding: 11px 18px; font-size: 13.5px; border: 1px solid transparent; }
 .btn-solid { background: var(--orange); color: #26210a; }

@@ -4,6 +4,7 @@ import DiagnosticsPage from "./Diagnostics";
 import CabinetPage from "./Cabinet";
 import AdminPanel from "./AdminPanel";
 import ModulesPage from "./Modules";
+import AiPage from "./AiPage";
 import {
   Sun,
   Gauge,
@@ -417,6 +418,7 @@ async function registerAccount({ email, password, grade, subjects, lang }) {
     module_deadlines: {},
     completed_modules: [],
     unlocked_achievements: [],
+    roadmap: [],
   };
 }
 
@@ -429,7 +431,7 @@ async function loginAccount({ email, password }) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select(
-      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines, completed_modules, unlocked_achievements"
+      "id, email, grade, subjects, language, diagnostics_completed, diagnostic_results, is_admin, xp, coins, recommended_modules, streak, max_streak, last_active_date, goal, modules_completed, perfect_module_completed, module_deadlines, completed_modules, unlocked_achievements, roadmap"
     )
     .eq("id", data.user.id)
     .single();
@@ -588,15 +590,31 @@ async function recordModuleCompletion(amount, isPerfect, moduleId) {
   };
 }
 
-// Marks the currently logged-in user's diagnostics as complete and
-// stores their per-subject results, so they're not asked to redo it.
-async function saveDiagnosticsResults(subjectResults) {
+// Turns per-subject diagnostic scores into an ordered prep plan: weakest
+// subject first, each broken into three generic stages. This is plain
+// rule-based logic (no AI involved) — it runs immediately after the
+// diagnostic and fills the roadmap card in Cabinet.jsx right away.
+function buildRoadmap(subjectResults) {
+  return [...subjectResults]
+    .map((r) => ({ subjectKey: r.subjectKey, pct: r.total > 0 ? Math.round((r.correct / r.total) * 100) : 0 }))
+    .sort((a, b) => a.pct - b.pct)
+    .map((r) => ({
+      subjectKey: r.subjectKey,
+      pct: r.pct,
+      stage: r.pct < 50 ? "foundations" : r.pct < 85 ? "practice" : "review",
+    }));
+}
+
+// Marks the currently logged-in user's diagnostics as complete, stores
+// their per-subject results, and saves the roadmap generated from them —
+// all in one update so the cabinet has everything it needs right after.
+async function saveDiagnosticsResults(subjectResults, roadmap) {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
 
   const { error } = await supabase
     .from("profiles")
-    .update({ diagnostics_completed: true, diagnostic_results: subjectResults })
+    .update({ diagnostics_completed: true, diagnostic_results: subjectResults, roadmap })
     .eq("id", userData.user.id);
   if (error) throw error;
 }
@@ -631,6 +649,9 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [competitions, setCompetitions] = useState([]);
   const [recommendedModulesInfo, setRecommendedModulesInfo] = useState([]);
+  // Set when the AI assistant suggests a module — ModulesPage picks this
+  // up on mount to auto-open that module, then it's cleared.
+  const [pendingModuleId, setPendingModuleId] = useState(null);
 
   // Small "+N coins" notifications — shown whenever coins land on the
   // account (level-up, achievement unlock, streak achievement at login),
@@ -1081,9 +1102,12 @@ export default function App() {
           onBack={() => goto("landing")}
           onFinish={async (results) => {
             setSubjectResults(results);
-            setProfile((p) => (p ? { ...p, diagnostics_completed: true, diagnostic_results: results } : p));
+            const roadmap = buildRoadmap(results);
+            setProfile((p) =>
+              p ? { ...p, diagnostics_completed: true, diagnostic_results: results, roadmap } : p
+            );
             try {
-              await saveDiagnosticsResults(results);
+              await saveDiagnosticsResults(results, roadmap);
             } catch (err) {
               // Non-fatal: the user still sees their cabinet this session,
               // but the "already completed" flag may not have persisted —
@@ -1115,8 +1139,10 @@ export default function App() {
           goal={profile?.goal || ""}
           onSetGoal={handleSetGoal}
           competitions={competitions}
+          roadmap={profile?.roadmap || []}
           onNavigate={(key) => {
             if (key === "modules") goto("modules");
+            if (key === "ai") goto("ai");
           }}
           onGoToTasks={() => goto("modules")}
           onLogout={handleLogout}
@@ -1131,6 +1157,8 @@ export default function App() {
           recommendedIds={profile?.recommended_modules || []}
           moduleDeadlines={profile?.module_deadlines || {}}
           completedIds={profile?.completed_modules || []}
+          initialModuleId={pendingModuleId}
+          onInitialModuleConsumed={() => setPendingModuleId(null)}
           onBack={() => goto("cabinet")}
           onFinish={async (xpGained, isPerfect, moduleId) => {
             try {
@@ -1170,6 +1198,19 @@ export default function App() {
               );
               return null;
             }
+          }}
+        />
+      )}
+
+      {view === "ai" && (
+        <AiPage
+          lang={lang}
+          grade={profile?.grade}
+          subjects={profile?.subjects || []}
+          onBack={() => goto("cabinet")}
+          onOpenModule={(moduleId) => {
+            setPendingModuleId(moduleId);
+            goto("modules");
           }}
         />
       )}
